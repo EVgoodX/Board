@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Board</title>
+<style>
+:root{--bg:#EEF1F7;--surface:#fff;--fg:#1B2340;--muted:#5C6584;--line:#D5DAE8;--accent:#B23A48;--gold:#D99A00}
+@media (prefers-color-scheme:dark){:root{--bg:#11141D;--surface:#1A1F2D;--fg:#E7EAF3;--muted:#9AA3BF;--line:#2D3448;--accent:#F07383;--gold:#F2C14E;color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:24px 16px;background:var(--bg);color:var(--fg);font:15px/1.65 "Hiragino Sans","Yu Gothic",sans-serif}
+form{width:min(100%,380px);background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px;display:grid;gap:14px}
+h1{font-size:20px;margin:0}
+p{margin:0}
+label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px}
+input{width:100%;font:inherit;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+button{font:inherit;font-weight:700;padding:9px 16px;border-radius:8px;border:none;background:var(--accent);color:#fff;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+input:focus-visible,button:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.err{color:var(--accent);font-size:13px}
+.err:empty{display:none}
+</style></head><body>
+<form id="f" autocomplete="off">
+  <h1>ログイン</h1>
+  <p>開くにはパスワードを入力してください。パスワードは半角の英字と数字を両方含む8文字以上です。</p>
+  <div><label for="pw">パスワード</label><input type="password" id="pw" autocomplete="current-password" required></div>
+  <div class="err" id="err" role="alert"></div>
+  <button id="go" type="submit">開く</button>
+</form>
+<script>
+(function(){
+  // 中身は a.bin（画面）と d.bin（データ）に暗号化して置いてある。パスワードから鍵を作り、改ざんチェック（HMAC）が通ったものだけを復号する
+  var SALT='eb554b683d8e5733e899b28199e11073',ITER=600000;
+  var f=document.getElementById('f'),pw=document.getElementById('pw'),err=document.getElementById('err'),go=document.getElementById('go');
+  var fails=0,until=0;
+  function b64(s){var b=atob(s),u=new Uint8Array(b.length);for(var i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u}
+  function hexb(s){var u=new Uint8Array(s.length/2);for(var i=0;i<u.length;i++)u[i]=parseInt(s.substr(i*2,2),16);return u}
+  async function keys(p){
+    var base=await crypto.subtle.importKey('raw',new TextEncoder().encode(p),'PBKDF2',false,['deriveBits']);
+    var bits=new Uint8Array(await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:hexb(SALT),iterations:ITER},base,512));
+    return {enc:await crypto.subtle.importKey('raw',bits.slice(0,32),'AES-CBC',false,['decrypt']),
+            mac:await crypto.subtle.importKey('raw',bits.slice(32),{name:'HMAC',hash:'SHA-256'},false,['verify'])};
+  }
+  async function load(name){var r=await fetch(name+'?t='+Date.now(),{cache:'no-store'});if(!r.ok)throw new Error(name);return r.json()}
+  async function unseal(k,box){
+    var iv=b64(box.iv),ct=b64(box.ct),msg=new Uint8Array(iv.length+ct.length);msg.set(iv);msg.set(ct,iv.length);
+    if(!await crypto.subtle.verify('HMAC',k.mac,b64(box.mac),msg))return null;
+    return new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-CBC',iv:iv},k.enc,ct));
+  }
+  f.addEventListener('submit',async function(e){
+    e.preventDefault();
+    if(Date.now()<until){err.textContent='まちがいが続いたため、'+Math.ceil((until-Date.now())/1000)+'秒待ってから入力してください。';return}
+    go.disabled=true;err.textContent='確認しています…';
+    try{
+      var boxes=await Promise.all([load('a.bin'),load('d.bin')]),k=await keys(pw.value);
+      var app=await unseal(k,boxes[0]);
+      if(app===null){
+        fails++;if(fails>=5)until=Date.now()+30000*Math.pow(2,Math.min(fails-5,5));
+        err.textContent='パスワードが違います。半角英数字を含む8文字以上で入力してください。';return;
+      }
+      var data=await unseal(k,boxes[1]);
+      pw.value='';
+      app=app.replace('__BOARD_JSON__',function(){return data||'null'});
+      document.open();document.write(app);document.close();
+    }catch(ex){err.textContent='読み込みに失敗しました。通信状態を確認して、もう一度お試しください。'}
+    finally{go.disabled=false}
+  });
+})();
+</script>
+</body></html>

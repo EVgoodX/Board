@@ -1,0 +1,31 @@
+name: update
+on:
+  schedule:
+    - cron: '7 15 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/**']
+permissions:
+  contents: write
+  pages: write
+concurrency: update
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: build
+        env:
+          BOARD_PW: ${{ secrets.BOARD_PW }}
+        run: python3 -I .github/run.py
+      - name: push
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git add d.bin
+          if git diff --cached --quiet; then echo 'no change'; exit 0; fi
+          git -c user.name=board -c user.email=board@users.noreply.github.com commit -q -m update
+          git push -q
+          curl -sS -o /dev/null -X POST -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/${{ github.repository }}/pages/builds" || true
